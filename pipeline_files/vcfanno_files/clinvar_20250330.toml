@@ -1,0 +1,5 @@
+[[annotation]]
+file = "/vast/projects/bahlo_epilepsy/somatic_annotation_data/ClinVar/clinvar_20250330.vcf.gz"
+fields = ["CLNSIG", "CLNSIGCONF", "CLNDN", "GENEINFO"]
+names = ["ClinVarSIG", "ClinVarSIGCONF", "ClinVarDN", "ClinVarGene"]
+ops=["self", "self", "self", "self"]

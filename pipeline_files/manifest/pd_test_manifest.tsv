@@ -1,0 +1,2 @@
+ID	NORMAL	TUMOR	BAM_PATH	VCF_PATH
+Sample20012	NA	Sample20012	/vast/scratch/users/han.ji/PD_BBDP_sarek_TestPipeline/Data/preprocessing/recalibrated	/vast/scratch/users/han.ji/PD_BBDP_sarek_TestPipeline/Data/variant_calling

@@ -1,0 +1,4 @@
+ID	NORMAL	TUMOR	BAM_PATH	VCF_PATH
+33299	33299-1	33299-3	/stornext/Bioinf/data/lab_bahlo/projects/epilepsy/analysis/cohorts/FCD/240701_FCD_Cohort_Paired/preprocessing/recalibrated	/stornext/Bioinf/data/lab_bahlo/projects/epilepsy/analysis/cohorts/FCD/240701_FCD_Cohort_Paired/variant_calling/
+32613	32613-2	32613-3	/stornext/Bioinf/data/lab_bahlo/projects/epilepsy/analysis/cohorts/FCD/240701_FCD_Cohort_Paired/preprocessing/recalibrated	/stornext/Bioinf/data/lab_bahlo/projects/epilepsy/analysis/cohorts/FCD/240701_FCD_Cohort_Paired/variant_calling/
+38711	NA	38711-3	/vast/projects/bahlo_epilepsy/sarek_output/240617_WES/preprocessing/recalibrated/	/vast/projects/bahlo_epilepsy/sarek_output/240617_WES/variant_calling/
