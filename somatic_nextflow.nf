@@ -5,7 +5,12 @@ nextflow.enable.dsl=2
 params.output_prefix       = './somatic_nextflow'
 params.sample_info         = "${projectDir}/pipeline_files/manifests/test_manifest.tsv"
 params.ref_fasta           = '/stornext/Bioinf/data/lab_bahlo/projects/epilepsy/hg38/reference/fasta/Homo_sapiens_assembly38.fasta'
-params.gene_bed            = '/vast/projects/reidj-project/gene_lists/Somatic_Gene_List_v2025-06.bed'
+params.gene_bed            = "${projectDir}/pipeline_files/gene_lists/Somatic_Gene_List_v2025-06.bed"
+params.ras_genes           = "${projectDir}/pipeline_files/gene_lists/20240923_ras_pathway_genes_namesonly.tsv"
+params.mtor_genes          = "${projectDir}/pipeline_files/gene_lists/20240923_mtor_pathway_genes_namesonly.tsv"
+params.mcd_panelapp_genes  = "${projectDir}/pipeline_files/gene_lists/MCD_Superpanel_PanelApp_GeneNames_v4.65.tsv"
+params.austin_panel_genes  = "${projectDir}/pipeline_files/gene_lists/Austin_Pathology_Solid_Tumour_Panel_GeneList.tsv"
+params.g4e_genes           = "${projectDir}/pipeline_files/gene_lists/EpilepsyGenes_v2025-03.tsv"
 params.spliceai_distance   =  500
 
 // vep files
@@ -724,8 +729,10 @@ process Create_Report {
 	
     script:
     """
-    Rscript /vast/projects/reidj-project/filter_somatic_variants.R ${vcf} ${meta.id}_somatic_variants_filtered_summary.xlsx
-    
+    Rscript ${projectDir}/pipeline_files/scripts/filter_somatic_variants.R \
+      ${vcf} ${meta.id}_somatic_variants_filtered_summary.xlsx \
+      ${params.gene_bed} \
+      ${params.ras_genes} ${params.mtor_genes} ${params.mcd_panelapp_genes} ${params.austin_panel_genes} ${params.g4e_genes}
     """
 }
 
@@ -743,7 +750,7 @@ process Create_BAMlet {
     tuple val(meta), path(variant_summary)
 
     output:
-    tuple val(meta), path("*.cram"), path("*.cram.crai")
+    tuple val(meta), path("${meta.tumor}.subset.cram"), path("${meta.tumor}.subset.cram.crai")
 
     script:
     // Determine BAM or CRAM file path
@@ -764,19 +771,13 @@ process Create_BAMlet {
     def out_crai = "${meta.tumor}.subset.cram.crai"
 
     """
-    samtools view -b -L ${params.gene_bed} -o subset.bam ${BAM_FILE}
+    samtools view -b -L ${params.gene_bed} -T ${params.ref_fasta} -o subset.bam ${BAM_FILE}
 
     samtools sort -o ${out_cram} -T temp_subset -O cram -T ${meta.tumor}_tmp.bam --reference ${params.ref_fasta} subset.bam
 
     samtools index ${out_cram}
     """
 }
-
-
-'''
-bcftools +fill-tags --threads 4 somatic_variants_annotated_cadd.vcf.gz -O z -o ${meta.tumor}_somatic_variants_annotated.vcf.gz -- -t AF,AN,AC	
-tabix -f ${meta.tumor}_somatic_variants_annotated.vcf.gz				
-'''
 
 workflow {
 
@@ -818,157 +819,5 @@ workflow {
         | Compress_Index
         | Filter_Variants
         | Create_Report
-        | Create_BAMlet
-}
-
-
-'''
-
-workflow {
-
-    // Create a channel from the sample info file with proper meta map structure
-    ch_samples = Channel
-        .fromPath(params.sample_info)
-        .splitCsv(header: true, sep: "\t")
-        .map { row ->
-            def meta = [
-                id: row.ID,
-                normal: row.NORMAL,
-                tumor: row.TUMOR,
-                bam_path: row.BAM_PATH,
-                vcf_path: row.VCF_PATH
-            ]
-            return meta
-        }
-
-    // Process the sample channel - ensure meta is carried through
-    ch_processed = ProcessSample(ch_samples)
-
-    // Split VCF while maintaining sample identity
-    ch_split_vcf = Split_Vcf(ch_processed.MergedVCF)
-        .transpose()
-
-    // Combine split VCF with corresponding BAM file using the meta map
-    ch_combined = ch_split_vcf
-        .combine(ch_processed.BamFILE, by: 0)
-
-    // Annotation pipeline - split into three processes
-    ch_mpileup    = mpileup_check(ch_combined)
-    ch_vep        = ensembl_vep(ch_mpileup)
-    ch_annotated  = gnomad(ch_vep)
-
-
-    ch_cadd = CADD_Run_Container(ch_annotated)
-
-    ch_cadd_processed = Process_CADD(ch_cadd)
-   
-    ch_clinvar = ClinVar(ch_cadd_processed)
-
-    // Group by sample ID before joining VCFs
-    ch_grouped = ch_clinvar
-        .groupTuple(by: 0)
-
-    ch_joined = Join_VCF(ch_grouped)
-
-    // Merge channels
-    ch_merged_for_check = ch_joined.JoinedVCF
-        .join(ch_processed.IndividualTools, by: 0)
-
-    ch_check_tools = Check_Tools(ch_merged_for_check)
-
-    ch_compessed = Compress_Index(ch_check_tools)
-
-    ch_filtered = Filter_Variants(ch_compressed)
-
-    ch_report = Create_Report(ch_filtered)
-
-    ch_bamlet = Create_BAMlet(ch_report)
-
-   
-} 
-
-'''
-
-
-
-process Annotate {
-
-	module 'ensembl-vep/112'
-
-	cpus = 1
-	memory = { 5 * task.attempt + ' GB' }
-	time = { 1 * task.attempt + ' h'}
-
-	input: tuple val(meta), path(split_vcf), path(BamFILE)
-
-	output: tuple val(meta), path ("somatic_variants_annotated.vcf")
-
-    script:
-		"""
-		#Check all positions
-		bcftools mpileup  -x --indels-2.0 --max-depth 1000000 --max-idepth 100000 --gap-frac 0.0001 --min-BQ 20 --min-MQ 1 --annotate FORMAT/AD,FORMAT/ADF,FORMAT/ADR --fasta-ref ${params.ref_fasta} --targets-file ${split_vcf} ${BamFILE} |
-		bcftools norm  --multiallelics -any -f ${params.ref_fasta} |
-		bcftools call -mA |
-		bcftools view -i "FORMAT/ADF[0:1]>=1 && FORMAT/ADR[0:1]>=1 && FORMAT/AD[0:1]>=3" -Oz -o mpileup_version.vcf.gz
-
-		#Run ensembl-vep
-		echo "Running ensembl-vep..."
-		vep --cache --dir /stornext/Bioinf/data/lab_bahlo/ref_db/vep-cache/ --cache_version 104 --assembly GRCh38 \
-				-i mpileup_version.vcf.gz -o merged_vep.vcf --format vcf --vcf --symbol --terms SO --tsl --hgvs \
-				--fasta ${params.ref_fasta} --offline --sift b --polyphen b --ccds --hgvs --hgvsg --symbol \
-				--numbers --protein --af --af_1kg --max_af --variant_class --pick_allele_gene --force_overwrite
-		echo "ensembl-vep complete."
-
-		#gnomAD annotations
-		vcfanno -p 4 /stornext/Bioinf/data/lab_bahlo/users/reid.j/vcfanno/gnomad_v4.0.0.toml merged_vep.vcf > somatic_variants_vep_gnomad.vcf
-		vcfanno -p 4 /stornext/Bioinf/data/lab_bahlo/users/reid.j/vcfanno/gnomad_v4_postprocess.toml somatic_variants_vep_gnomad.vcf > somatic_variants_annotated.vcf
-		"""
-}
-
-
-process Check_Tools_OG {
-	
-	cpus = 1
-	memory = { 1 * task.attempt + ' GB' }
-	time = { 1 * task.attempt + ' h'}
-
-	publishDir "results", mode: "copy"
-
-	input:
-		tuple val(meta), path(vcf), path(vcf_index), path(mutect), path(freebayes), path(strelka)
-		
-	output:
-		tuple val(meta), path("*_somatic_variants_merged.vcf.gz"), path("*_somatic_variants_merged.vcf.gz.tbi")
-	
-	shell:
-	'''
-	# Step 1: Generate the TOML configuration file for VCFAnno
-	cat <<EOL > "annotations_config.toml"
-	[[annotation]]
-	file="mutect_v4.vcf.gz"
-	fields=["Mutect"]
-	ops=["self"] 
-
-	[[annotation]]
-	file="strelka_v5.vcf.gz"
-	fields=["Strelka"]
-	ops=["self"]
-
-	[[annotation]]
-	file="freebayes_v4.vcf.gz"
-	fields=["Freebayes"]
-	ops=["self"]
-
-	[[postannotation]]
-	fields=["Mutect", "Strelka", "Freebayes"]
-	op="sum"
-	name="Tool_Count"
-	type="Float"
-	EOL
-
-	# Step 2: Apply annotations using VCFAnno
-	vcfanno -p 4 annotations_config.toml !{vcf} > !{meta.id}_somatic_variants_merged.vcf
-	bgzip -f !{meta.id}_somatic_variants_merged.vcf
-	tabix -f !{meta.id}_somatic_variants_merged.vcf.gz
-	'''
+        //| Create_BAMlet
 }
